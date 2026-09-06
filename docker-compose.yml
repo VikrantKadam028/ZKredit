@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: zkredit
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-zkredit_dev_password}
+      POSTGRES_DB: zkredit
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U zkredit"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    ports:
+      - "8000:8000"
+    volumes:
+      # Circuit artifacts (settings.json, model.compiled, vk.key, and your
+      # locally-generated pk.key) — mounted read-only so proof generation
+      # works without baking the (large, model-specific) pk.key into the image.
+      - ./circuits:/app/circuits:ro
+      # Persists the KZG SRS cache across container restarts, so you don't
+      # re-download it (~few hundred MB) every time.
+      - ezkl_srs_cache:/root/.ezkl
+    environment:
+      - CIRCUIT_DIR=/app/circuits/loan_model
+      - DATABASE_URL=postgresql://zkredit:${POSTGRES_PASSWORD:-zkredit_dev_password}@db:5432/zkredit
+      # CHANGE THIS in any real deployment — this default is dev-only.
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-secret-change-in-production}
+      # Get this from https://console.cloud.google.com/apis/credentials
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: http://localhost:8000
+        VITE_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  ezkl_srs_cache:
